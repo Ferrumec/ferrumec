@@ -62,11 +62,10 @@ impl EventStream for LocalEventStream {
                 }
             }
 
-            if dead {
-                if let Some(mut senders) = self.subs.get_mut(&subject) {
+            if dead
+                && let Some(mut senders) = self.subs.get_mut(&subject) {
                     senders.retain(|tx| !tx.is_closed());
                 }
-            }
 
             Ok(())
         })
@@ -83,7 +82,7 @@ impl EventStream for LocalEventStream {
             // Insert sender. Need write lock on shard, but only briefly.
             self.subs
                 .entry(subject.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(tx);
 
             let mut tasks = self._tasks.lock().await;

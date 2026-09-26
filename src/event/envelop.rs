@@ -55,6 +55,12 @@ pub struct EventMetaData {
     pub session_id: Option<Uuid>,
 }
 
+impl Default for EventMetaData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventMetaData {
     pub fn new() -> Self {
         Self {
