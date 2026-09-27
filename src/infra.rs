@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use async_trait::async_trait;
+
+#[async_trait]
 pub trait Infra {
     async fn health_check(&self) -> Status;
     fn database(&self) -> PgPool;
@@ -58,6 +61,7 @@ impl LocalInfra {
     }
 }
 
+#[async_trait]
 impl Infra for LocalInfra {
     async fn health_check(&self) -> Status {
         let pg = Self::check_postgres(&self.postgres).await;
@@ -80,12 +84,12 @@ impl Infra for LocalInfra {
 
 #[cfg(feature = "distributed")]
 pub mod dist {
-    use sqlx::PgPool;
     use crate::event::NatsEventStream;
-    use sqlx::postgres::PgPoolOptions;
-    use crate::infra::{Status,EventStream,CacheFactory,Arc,Infra};
+    use crate::infra::{Arc, CacheFactory, EventStream, Infra, Status};
     use async_nats::Client as NatsClient;
     use redis::aio::ConnectionManager as RedisManager;
+    use sqlx::PgPool;
+    use sqlx::postgres::PgPoolOptions;
     use std::time::{Duration, Instant};
 
     #[derive(Clone)]
@@ -96,7 +100,11 @@ pub mod dist {
     }
 
     impl RemoteInfra {
-        pub fn new(postgres: PgPool, redis: RedisManager, nats: NatsClient) -> Result<Self, Box<dyn std::error::Error + Send + Sync>>  {
+        pub fn new(
+            postgres: PgPool,
+            redis: RedisManager,
+            nats: NatsClient,
+        ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
             let nats = Arc::new(NatsEventStream::from_client(nats)?);
             Ok(Self {
                 postgres,
@@ -161,6 +169,7 @@ pub mod dist {
         }
     }
 
+    #[async_trait::async_trait]
     impl Infra for RemoteInfra {
         async fn health_check(&self) -> Status {
             let (pg, rd, nt) = tokio::join!(

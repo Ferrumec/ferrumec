@@ -62,10 +62,9 @@ impl EventStream for LocalEventStream {
                 }
             }
 
-            if dead
-                && let Some(mut senders) = self.subs.get_mut(&subject) {
-                    senders.retain(|tx| !tx.is_closed());
-                }
+            if dead && let Some(mut senders) = self.subs.get_mut(&subject) {
+                senders.retain(|tx| !tx.is_closed());
+            }
 
             Ok(())
         })
@@ -80,10 +79,7 @@ impl EventStream for LocalEventStream {
             let (tx, mut rx) = mpsc::channel::<Msg>(self.channel_capacity);
 
             // Insert sender. Need write lock on shard, but only briefly.
-            self.subs
-                .entry(subject.clone())
-                .or_default()
-                .push(tx);
+            self.subs.entry(subject.clone()).or_default().push(tx);
 
             let mut tasks = self._tasks.lock().await;
             tasks.spawn(async move {
