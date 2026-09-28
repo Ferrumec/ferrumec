@@ -2,6 +2,8 @@
 name = "ferrumec"
 version = "0.1.0"
 edition = "2024"
+description = "Core building blocks for event-driven Rust microservices: pluggable event streams (local or NATS), caching (Moka or Redis), and Postgres-backed infrastructure."
+license = "MIT"
 
 [dependencies]
 async-nats = { version = "0.47.0", optional = true }
