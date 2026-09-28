@@ -2,7 +2,7 @@ pub mod cache;
 pub mod event;
 pub mod infra;
 
-pub use cache::Store;
+pub use cache::{Store,CacheFactory};
 pub use event::{Event, EventStream, EventType, Subscriber};
 pub use infra::{Infra, LocalInfra};
 

@@ -31,7 +31,7 @@ use serde::{Serialize, de::DeserializeOwned};
 /// in-memory `moka` cache; tests may prefer a no-op or deterministic
 /// implementation). `name` identifies the logical cache (e.g.
 /// `"community_items"`) and `ttl` is the requested expiry for entries.
-pub trait CacheFactory {
+pub trait CacheFactory:Clone {
     fn new_cache<K, V>(&self, name: &str, ttl: Duration) -> Arc<dyn Store<K, V>>
     where
         K: Hash + Eq + Clone + Serialize + Send + Sync + 'static,
