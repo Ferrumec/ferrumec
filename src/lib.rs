@@ -1,11 +1,11 @@
 pub mod cache;
 pub mod event;
 pub mod infra;
-
-pub use cache::{Store,CacheFactory};
+pub mod observability;
+pub use cache::{CacheFactory, Store};
 pub use event::{Event, EventStream, EventType, Subscriber};
 pub use infra::{Infra, LocalInfra};
-
+pub use observability::{Observability, record_request};
 pub trait Module: Sized {
     fn new(
         infras: impl Infra,
