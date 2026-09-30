@@ -15,7 +15,7 @@ pub async fn launch(modules: Vec<(&'static str, Arc<dyn Module>)>) -> std::io::R
     let telemetry = Observability::init("mains", env!("CARGO_PKG_VERSION"))
         .expect("failed to initialize observability");
 
-    println!(
+    tracing::info!(
         "Observability initialized: logs=VictoriaLogs, \
          metrics=VictoriaMetrics, traces=OTLP"
     );

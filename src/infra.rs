@@ -36,6 +36,7 @@ pub struct Status {
     pub nats_latency_ms: Option<u128>,
 }
 
+#[derive(Clone)]
 pub struct LocalInfra {
     pub postgres: PgPool,
     pub cache_factory: MokaCacheFactory,
