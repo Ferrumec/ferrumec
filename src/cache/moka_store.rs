@@ -25,8 +25,10 @@ impl<K: Clone + Hash + Eq + Send + Sync + 'static, V: Clone + Send + Sync + 'sta
 
     /// Remove the entry stored under `key`, if present.
     async fn delete(&self, key: &K) -> Result<(), Box<dyn Error>> {
-        self.remove(key).await;
-        Ok(())
+        Ok(self.invalidate(key).await)
+    }
+    async fn clear(&self) -> Result<(), Box<dyn Error>> {
+        Ok(self.invalidate_all())
     }
 }
 

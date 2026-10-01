@@ -21,6 +21,7 @@ pub trait Store<K, V>: Send + Sync {
     async fn set(&self, key: &K, value: V) -> Result<(), Box<dyn Error>>;
 
     async fn delete(&self, key: &K) -> Result<(), Box<dyn Error>>;
+    async fn clear(&self) -> Result<(), Box<dyn Error>>;
 }
 
 use serde::{Serialize, de::DeserializeOwned};
