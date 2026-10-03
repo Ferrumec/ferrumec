@@ -39,6 +39,17 @@ pub use nats::{NatsAloStream, NatsEventStream};
 
 pub trait EventType: Serialize + DeserializeOwned + Send + Sync + 'static {
     const SUBJECT: &'static str;
+
+    fn publish<'a>(&self, es: Arc<dyn EventStream>) -> BoxFuture<'_, Result<(), EventError>> {
+        Box::pin(async move {
+            es.publish(
+                Self::SUBJECT.to_string(),
+                serde_json::to_string(self)?.into(),
+            )
+            .await
+            .into()
+        })
+    }
 }
 
 #[async_trait]

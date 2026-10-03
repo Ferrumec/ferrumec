@@ -213,3 +213,350 @@ impl Drop for LocalEventStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::time::Duration;
+    use tokio::sync::{Semaphore, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
+    use tokio::time::{sleep, timeout};
+
+    type Got = (String, Vec<u8>);
+
+    /// Forwards every message to the test; optionally blocks on a gate first
+    /// so tests can simulate a slow consumer.
+    struct Recorder {
+        out: UnboundedSender<Got>,
+        gate: Option<Arc<Semaphore>>,
+    }
+
+    // NOTE: assumes `Handler::handle(&self, String, Vec<u8>) -> BoxFuture<'_, Result<(), EventError>>`.
+    #[async_trait]
+    impl Handler for Recorder {
+        async fn handle(&self, subject: String, payload: Vec<u8>) -> Result<(), EventError> {
+            if let Some(gate) = &self.gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            let _ = self.out.send((subject, payload));
+            Ok(())
+        }
+    }
+
+    /// Does nothing; only holds a marker so tests can see when its task is gone.
+    struct Marker(#[allow(dead_code)] Arc<()>);
+
+    #[async_trait]
+    impl Handler for Marker {
+        async fn handle(&self, _: String, _: Vec<u8>) -> Result<(), EventError> {
+            Ok(())
+        }
+    }
+
+    fn recorder() -> (Arc<Recorder>, UnboundedReceiver<Got>) {
+        let (out, rx) = mpsc::unbounded_channel();
+        (Arc::new(Recorder { out, gate: None }), rx)
+    }
+
+    fn gated() -> (Arc<Recorder>, UnboundedReceiver<Got>, Arc<Semaphore>) {
+        let (out, rx) = mpsc::unbounded_channel();
+        let gate = Arc::new(Semaphore::new(0));
+        let h = Arc::new(Recorder {
+            out,
+            gate: Some(gate.clone()),
+        });
+        (h, rx, gate)
+    }
+
+    async fn publish(s: &LocalEventStream, subject: &str, body: &str) {
+        s.publish(subject.to_string(), body.as_bytes().to_vec())
+            .await
+            .unwrap();
+    }
+
+    async fn subscribe(s: &LocalEventStream, subject: &str, h: Arc<Recorder>) {
+        s.subscribe(subject.to_string(), h).await.unwrap();
+    }
+
+    async fn next(rx: &mut UnboundedReceiver<Got>) -> Got {
+        timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for message")
+            .expect("channel closed")
+    }
+
+    async fn expect_silence(rx: &mut UnboundedReceiver<Got>) {
+        assert!(
+            timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
+            "unexpected message"
+        );
+    }
+
+    // ---------- matcher ----------
+
+    #[test]
+    fn matcher_table() {
+        let cases = [
+            ("a.b", "a.b", true),
+            ("a.b", "a.c", false),
+            ("a.b", "a", false),
+            ("a", "a.b", false),
+            ("a.*", "a.b", true),
+            ("a.*", "a", false),
+            ("a.*", "a.b.c", false),
+            ("*.b", "a.b", true),
+            ("*", "a", true),
+            ("*", "a.b", false),
+            ("a.*.c", "a.b.c", true),
+            ("a.*.c", "a.b.d", false),
+            ("a.>", "a.b", true),
+            ("a.>", "a.b.c", true),
+            ("a.>", "a", false),
+            (">", "a", true),
+            (">", "a.b.c", true),
+            ("a.>.c", "a.b.c", false), // `>` must be last
+        ];
+        for (pattern, subject, want) in cases {
+            assert_eq!(
+                subject_matches(pattern, subject),
+                want,
+                "{pattern} vs {subject}"
+            );
+        }
+    }
+
+    #[test]
+    fn wildcard_detection() {
+        assert!(!is_wildcard("a.b.c"));
+        assert!(is_wildcard("a.*"));
+        assert!(is_wildcard("a.>"));
+        assert!(is_wildcard(">"));
+        assert!(!is_wildcard("a.b*")); // `*` only counts as a whole token
+    }
+
+    // ---------- routing ----------
+
+    #[tokio::test]
+    async fn subscriptions_land_in_the_right_map() {
+        let s = LocalEventStream::new(4);
+        let (h, _rx) = recorder();
+        subscribe(&s, "a.b", h.clone()).await;
+        subscribe(&s, "a.*", h.clone()).await;
+        subscribe(&s, "a.>", h).await;
+        assert!(s.exact.contains_key("a.b"));
+        assert!(!s.exact.contains_key("a.*"));
+        assert!(s.wildcards.contains_key("a.*"));
+        assert!(s.wildcards.contains_key("a.>"));
+    }
+
+    #[tokio::test]
+    async fn exact_delivery_and_non_match() {
+        let s = LocalEventStream::new(4);
+        let (h, mut rx) = recorder();
+        subscribe(&s, "orders.created", h).await;
+
+        publish(&s, "orders.created", "x").await;
+        assert_eq!(
+            next(&mut rx).await,
+            ("orders.created".to_string(), b"x".to_vec())
+        );
+
+        publish(&s, "orders.deleted", "y").await;
+        expect_silence(&mut rx).await;
+    }
+
+    #[tokio::test]
+    async fn publish_without_subscribers_is_ok() {
+        let s = LocalEventStream::new(4);
+        s.publish("nobody.home".into(), vec![1, 2, 3])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlapping_patterns_each_get_one_copy() {
+        let s = LocalEventStream::new(8);
+        let (h1, mut exact) = recorder();
+        let (h2, mut star) = recorder();
+        let (h3, mut tail) = recorder();
+        let (h4, mut all) = recorder();
+        subscribe(&s, "a.b", h1).await;
+        subscribe(&s, "a.*", h2).await;
+        subscribe(&s, "a.>", h3).await;
+        subscribe(&s, ">", h4).await;
+
+        publish(&s, "a.b", "1").await;
+        for rx in [&mut exact, &mut star, &mut tail, &mut all] {
+            assert_eq!(next(rx).await.0, "a.b");
+            expect_silence(rx).await; // exactly one copy
+        }
+
+        publish(&s, "a.b.c", "2").await;
+        expect_silence(&mut exact).await;
+        expect_silence(&mut star).await;
+        assert_eq!(next(&mut tail).await.0, "a.b.c");
+        assert_eq!(next(&mut all).await.0, "a.b.c");
+    }
+
+    #[tokio::test]
+    async fn multiple_subscribers_on_same_subject_all_receive() {
+        let s = LocalEventStream::new(4);
+        let (h1, mut rx1) = recorder();
+        let (h2, mut rx2) = recorder();
+        subscribe(&s, "t", h1).await;
+        subscribe(&s, "t", h2).await;
+        publish(&s, "t", "m").await;
+        assert_eq!(next(&mut rx1).await.1, b"m");
+        assert_eq!(next(&mut rx2).await.1, b"m");
+    }
+
+    #[tokio::test]
+    async fn per_subscriber_ordering_is_preserved() {
+        let s = LocalEventStream::new(8); // small, so publish hits the slow path too
+        let (h, mut rx) = recorder();
+        subscribe(&s, "seq", h).await;
+        for i in 0..200u32 {
+            s.publish("seq".into(), i.to_be_bytes().to_vec())
+                .await
+                .unwrap();
+        }
+        for i in 0..200u32 {
+            assert_eq!(next(&mut rx).await.1, i.to_be_bytes().to_vec());
+        }
+    }
+
+    // ---------- backpressure / concurrency ----------
+
+    #[tokio::test]
+    async fn full_channel_applies_backpressure_then_delivers_losslessly() {
+        let s = Arc::new(LocalEventStream::new(1));
+        let (h, mut rx, gate) = gated();
+        subscribe(&s, "bp", h).await;
+
+        publish(&s, "bp", "a").await; // taken by the handler, which then blocks on the gate
+        sleep(Duration::from_millis(20)).await;
+        publish(&s, "bp", "b").await; // fills the single channel slot
+
+        let s2 = s.clone();
+        let third = tokio::spawn(async move { s2.publish("bp".into(), b"c".to_vec()).await });
+        sleep(Duration::from_millis(50)).await;
+        assert!(
+            !third.is_finished(),
+            "publish should be blocked by backpressure"
+        );
+
+        gate.add_permits(3);
+        third.await.unwrap().unwrap();
+        for want in ["a", "b", "c"] {
+            assert_eq!(next(&mut rx).await.1, want.as_bytes());
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_subscriber_does_not_block_delivery_to_others() {
+        let s = Arc::new(LocalEventStream::new(1));
+        let (slow, mut slow_rx, slow_gate) = gated();
+        let (fast, mut fast_rx, fast_gate) = gated();
+        subscribe(&s, "fan", slow).await; // first, so sequential sends would stall on it
+        subscribe(&s, "fan", fast).await;
+
+        publish(&s, "fan", "a").await;
+        sleep(Duration::from_millis(20)).await;
+        publish(&s, "fan", "b").await; // both channels now full
+
+        let s2 = s.clone();
+        let third = tokio::spawn(async move { s2.publish("fan".into(), b"c".to_vec()).await });
+        sleep(Duration::from_millis(20)).await;
+
+        // Free only the fast subscriber: it must get everything while the slow one is stuck.
+        fast_gate.add_permits(3);
+        for want in ["a", "b", "c"] {
+            assert_eq!(next(&mut fast_rx).await.1, want.as_bytes());
+        }
+        assert!(
+            !third.is_finished(),
+            "publish waits for the slow subscriber to accept"
+        );
+
+        slow_gate.add_permits(3);
+        third.await.unwrap().unwrap();
+        for want in ["a", "b", "c"] {
+            assert_eq!(next(&mut slow_rx).await.1, want.as_bytes());
+        }
+    }
+
+    // ---------- cleanup (#1) ----------
+
+    #[tokio::test]
+    async fn closed_exact_sender_is_removed_on_publish() {
+        let s = LocalEventStream::new(4);
+        let (tx, rx) = mpsc::channel::<Msg>(4);
+        drop(rx);
+        s.exact.entry("a.b".into()).or_default().push(tx);
+
+        publish(&s, "a.b", "x").await;
+        assert!(s.exact.get("a.b").is_none());
+    }
+
+    #[tokio::test]
+    async fn closed_wildcard_sender_is_removed_on_publish() {
+        let s = LocalEventStream::new(4);
+        let (tx, rx) = mpsc::channel::<Msg>(4);
+        drop(rx);
+        s.wildcards.entry("a.*".into()).or_default().push(tx);
+
+        publish(&s, "a.b", "x").await;
+        assert!(s.wildcards.get("a.*").is_none());
+    }
+
+    #[tokio::test]
+    async fn dead_sender_removal_keeps_live_siblings() {
+        let s = LocalEventStream::new(4);
+        let (h, mut rx) = recorder();
+        subscribe(&s, "a.b", h).await;
+        let (dead_tx, dead_rx) = mpsc::channel::<Msg>(4);
+        drop(dead_rx);
+        s.exact.get_mut("a.b").unwrap().push(dead_tx);
+
+        publish(&s, "a.b", "1").await;
+        assert_eq!(next(&mut rx).await.1, b"1");
+        assert_eq!(s.exact.get("a.b").unwrap().len(), 1);
+
+        publish(&s, "a.b", "2").await; // still routed to the survivor
+        assert_eq!(next(&mut rx).await.1, b"2");
+    }
+
+    #[test]
+    fn prune_never_removes_an_entry_that_has_a_live_sender() {
+        let map: DashMap<String, Vec<Tx>> = DashMap::new();
+        let (live, _live_rx) = mpsc::channel::<Msg>(1);
+        let (dead, dead_rx) = mpsc::channel::<Msg>(1);
+        drop(dead_rx);
+        map.insert("k".into(), vec![dead, live]);
+
+        LocalEventStream::prune(&map, "k");
+        assert_eq!(map.get("k").unwrap().len(), 1);
+
+        LocalEventStream::prune(&map, "missing"); // no-op, no panic
+    }
+
+    // ---------- lifecycle (#6) ----------
+
+    #[tokio::test]
+    async fn dropping_the_stream_aborts_handler_tasks() {
+        let marker = Arc::new(());
+        let s = LocalEventStream::new(4);
+        s.subscribe("t".into(), Arc::new(Marker(marker.clone())))
+            .await
+            .unwrap();
+        assert_eq!(Arc::strong_count(&marker), 2); // the task holds the handler
+
+        drop(s);
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            Arc::strong_count(&marker),
+            1,
+            "handler task should have been aborted"
+        );
+    }
+}
