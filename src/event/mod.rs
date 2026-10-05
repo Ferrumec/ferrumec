@@ -30,7 +30,9 @@ pub trait EventStream: Send + Sync {
     ) -> BoxFuture<'a, Result<(), EventError>>;
 }
 mod local;
+mod outbox;
 pub use local::LocalEventStream;
+pub use outbox::Outbox;
 
 #[cfg(feature = "distributed")]
 mod nats;
