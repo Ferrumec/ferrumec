@@ -27,6 +27,7 @@ impl<K: Clone + Hash + Eq + Send + Sync + 'static, V: Clone + Send + Sync + 'sta
     async fn delete(&self, key: &K) -> Result<(), Box<dyn Error>> {
         Ok(self.invalidate(key).await)
     }
+    /// Remove every entry from the cache.
     async fn clear(&self) -> Result<(), Box<dyn Error>> {
         Ok(self.invalidate_all())
     }
@@ -34,8 +35,11 @@ impl<K: Clone + Hash + Eq + Send + Sync + 'static, V: Clone + Send + Sync + 'sta
 
 /// [`CacheFactory`] backed by in-process [`moka`] caches, keyed by `name` so
 /// that repeated calls for the same logical cache (e.g. `"membership_items"`,
-/// shared between this super and `groups`) return the *same* underlying
-/// cache instead of a fresh, unshared one each time.
+/// requested by two different modules) return the *same* underlying cache
+/// instead of a fresh, unshared one each time.
+///
+/// Cloning the factory shares its registry. Asking for an existing `name` with
+/// a different key or value type logs an error and returns an unshared cache.
 ///
 /// Each cache is created with a fixed maximum capacity of 1000 entries and
 /// the TTL supplied to [`CacheFactory::new_cache`] the first time its name

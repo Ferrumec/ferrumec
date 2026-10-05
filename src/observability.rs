@@ -18,6 +18,19 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 static REQUESTS: OnceLock<Counter<u64>> = OnceLock::new();
 static REQUEST_DURATION: OnceLock<Histogram<f64>> = OnceLock::new();
 
+/// Handles to the OpenTelemetry providers installed by [`Observability::init`].
+///
+/// Logs, metrics and traces are exported over OTLP/HTTP. Endpoints can be
+/// overridden with environment variables:
+///
+/// | Variable                | Default                                                  |
+/// | ----------------------- | -------------------------------------------------------- |
+/// | `OTEL_LOGS_ENDPOINT`    | `http://127.0.0.1:9428/insert/opentelemetry/v1/logs`     |
+/// | `OTEL_METRICS_ENDPOINT` | `http://127.0.0.1:8428/opentelemetry/v1/metrics`         |
+/// | `OTEL_TRACES_ENDPOINT`  | `http://127.0.0.1:10428/insert/opentelemetry/v1/traces`  |
+///
+/// The defaults match a local VictoriaLogs / VictoriaMetrics / VictoriaTraces
+/// setup. Call [`Observability::shutdown`] before exit to flush pending data.
 pub struct Observability {
     logs: SdkLoggerProvider,
     metrics: SdkMeterProvider,
@@ -25,6 +38,16 @@ pub struct Observability {
 }
 
 impl Observability {
+    /// Installs the global meter, tracer and `tracing` subscriber.
+    ///
+    /// The subscriber combines an `EnvFilter` (from `RUST_LOG`, defaulting to
+    /// `info`), an OpenTelemetry log bridge, an OpenTelemetry trace layer and
+    /// a console `fmt` layer. `service_name` and `version` become the
+    /// `service.name` and `service.version` resource attributes.
+    ///
+    /// Fails if an exporter cannot be built, or if this was already called in
+    /// the process (the request metrics and the global subscriber can only be
+    /// set once).
     pub fn init(service_name: &str, version: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let resource = Resource::builder()
             .with_service_name(service_name.to_owned())
@@ -134,6 +157,10 @@ impl Observability {
         })
     }
 
+    /// Flushes and shuts down the log, trace and metric providers.
+    ///
+    /// Every provider is shut down even if an earlier one fails; failures are
+    /// printed to stderr.
     pub fn shutdown(&self) {
         // Attempt every shutdown even if one provider fails.
 

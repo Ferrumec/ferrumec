@@ -1,6 +1,6 @@
 [package]
 name = "ferrumec"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Core building blocks for event-driven Rust microservices: pluggable event streams (local or NATS), caching (Moka or Redis), and Postgres-backed infrastructure."
 license = "MIT"

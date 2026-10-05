@@ -13,6 +13,24 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send +
 type Msg = Arc<(String, Bytes)>; // Arc so clones are cheap
 type Tx = mpsc::Sender<Msg>;
 
+/// An in-process [`EventStream`] for development, tests and single-binary
+/// deployments.
+///
+/// - **Ordered and lossless:** each subscriber has its own bounded queue and
+///   handler task, so a subscriber sees messages in publish order. When a
+///   queue is full, [`publish`](EventStream::publish) waits (backpressure)
+///   rather than dropping the message, and returns once every subscriber has
+///   accepted it.
+/// - **No subscribers, no error:** publishing to a subject nobody listens to
+///   is a no-op.
+/// - **Wildcards:** subscription subjects may use NATS-style tokens: `*`
+///   matches exactly one token and `>` matches one or more trailing tokens
+///   (`user.*`, `user.>`).
+/// - **No retries:** a handler error is logged and the message is not
+///   redelivered.
+///
+/// Handler tasks are aborted when the stream is dropped. Not shared across
+/// processes; use the NATS streams for that.
 pub struct LocalEventStream {
     // Exact-subject subscriptions: O(1) lookup on publish.
     exact: DashMap<String, Vec<Tx>>,
@@ -31,6 +49,8 @@ struct Target {
 }
 
 impl LocalEventStream {
+    /// Creates a stream whose per-subscriber queue holds `channel_capacity`
+    /// messages before publishers start to wait.
     pub fn new(channel_capacity: usize) -> Self {
         Self {
             exact: DashMap::new(),
@@ -40,7 +60,11 @@ impl LocalEventStream {
         }
     }
 
-    // 8192 = ~8MB per subscriber if 1KB avg msg. Tune based on RAM.
+    /// Creates a stream with a large queue (8192 messages per subscriber), so
+    /// publishers rarely wait.
+    ///
+    /// 8192 is roughly 8 MB per subscriber at 1 KB per message; use
+    /// [`LocalEventStream::new`] to tune this to your memory budget.
     pub fn reliable() -> Self {
         Self::new(8192)
     }

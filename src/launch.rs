@@ -7,6 +7,20 @@ use tracing_actix_web::{DefaultRootSpanBuilder, TracingLogger};
 
 use crate::{Module, Observability, record_request};
 
+/// Initializes observability and runs an Actix Web server hosting `modules`.
+///
+/// Each `(namespace, module)` pair is registered with [`Module::configure`]
+/// on every worker. Requests are traced with `tracing-actix-web` and recorded
+/// through [`record_request`] (count and duration by method, route and
+/// status).
+///
+/// This is an opinionated bootstrap: it reports telemetry under the service
+/// name `"mains"`, binds to `127.0.0.1:8080`, and panics if observability
+/// cannot be initialized. Telemetry is flushed after the server stops. For
+/// other settings, build your own `HttpServer` and use [`Observability`] and
+/// [`record_request`] directly.
+///
+/// Requires the `launch` feature.
 pub async fn launch(modules: Vec<(&'static str, Arc<dyn Module>)>) -> std::io::Result<()> {
     // ---------------------------------------------------------
     // Observability

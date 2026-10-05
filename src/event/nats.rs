@@ -3,23 +3,37 @@ use std::sync::Arc;
 pub use async_nats::Error;
 use async_nats::{Client, jetstream};
 
+/// An [`EventStream`] over core NATS: fast, at-most-once.
+///
+/// Messages are not persisted. A subscriber that is offline, or a handler
+/// that returns an error, misses the message; errors are logged and not
+/// retried. Use [`NatsAloStream`] when messages must not be lost.
+///
+/// Subscriptions are queue subscriptions. Each stream instance gets a random
+/// group by default, so every instance receives every message; give
+/// replicas the same [`with_group`](NatsEventStream::with_group) name to
+/// share the load instead.
 pub struct NatsEventStream {
     pub(crate) client: Client,
     group: String,
 }
 
 impl NatsEventStream {
+    /// Connects to the NATS server at `url`.
     pub async fn new(url: &str) -> Result<Self, Error> {
         let client = async_nats::connect(url).await?;
         NatsEventStream::from_client(client)
     }
 
+    /// Wraps an existing NATS client.
     pub fn from_client(client: Client) -> Result<Self, Error> {
         Ok(Self {
             client,
             group: uuid::Uuid::new_v4().to_string(),
         })
     }
+    /// Sets the queue group used for subscriptions. Instances that share a
+    /// group split the messages between them.
     pub fn with_group(self, group: String) -> Self {
         Self { group, ..self }
     }
@@ -73,6 +87,19 @@ impl EventStream for NatsEventStream {
     }
 }
 
+/// An [`EventStream`] over NATS JetStream: durable, at-least-once.
+///
+/// [`NatsAloStream::new`] creates (or reuses) a JetStream stream named
+/// `stream_name` that captures the subjects `<stream_name lowercased>.>`, so
+/// every event subject must start with that prefix (stream `EVENTS` captures
+/// `events.user.registered`).
+///
+/// `publish` waits for the server's acknowledgement. Each subscription is a
+/// durable pull consumer named after the group and subject, with explicit
+/// acks: a handler that returns `Ok` acknowledges the message, and one that
+/// returns `Err` leaves it to be redelivered. Handlers must therefore be
+/// idempotent. As with [`NatsEventStream`], instances share the load only if
+/// they use the same [`with_group`](NatsAloStream::with_group) name.
 pub struct NatsAloStream {
     js: jetstream::Context,
     group: String,
@@ -80,11 +107,17 @@ pub struct NatsAloStream {
 }
 
 impl NatsAloStream {
+    /// Connects to the NATS server at `url` and ensures the JetStream stream
+    /// `stream_name` exists.
     pub async fn new(url: &str, stream_name: String) -> Result<Self, Error> {
         let client = async_nats::connect(url).await?;
         NatsAloStream::from_client(client, stream_name).await
     }
 
+    /// Like [`NatsAloStream::new`], using an existing NATS client.
+    ///
+    /// Fails if the stream cannot be created, for example because of bad
+    /// configuration or missing permissions.
     pub async fn from_client(client: Client, stream_name: String) -> Result<Self, Error> {
         let js = jetstream::new(client.clone());
 
@@ -105,6 +138,8 @@ impl NatsAloStream {
         })
     }
 
+    /// Sets the group used to name durable consumers. Instances that share a
+    /// group split the messages for each subject between them.
     pub fn with_group(self, group: String) -> Self {
         Self { group, ..self }
     }

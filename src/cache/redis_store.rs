@@ -18,6 +18,13 @@ type BoxError = Box<dyn Error>;
 /// `clear` bumps the version counter stored at `<namespace>:__version`, which
 /// instantly orphans every existing entry (they expire on their own via TTL)
 /// without needing `SCAN`/`DEL`.
+///
+/// Keys and values are JSON-encoded, so `K` must be [`Serialize`] and `V`
+/// both [`Serialize`] and [`DeserializeOwned`]. Entries expire after the TTL
+/// (applied with `PSETEX`, in milliseconds, minimum 1). Every `get`, `set` and
+/// `delete` first reads the version counter, so each costs two round trips.
+/// Create one with [`RedisCache::new`], or through a `ConnectionManager` used
+/// as a [`CacheFactory`](super::CacheFactory).
 pub struct RedisCache<K, V> {
     connection: ConnectionManager,
     /// `"<namespace>:"` — the trailing delimiter prevents `foo` + `"bar"` from

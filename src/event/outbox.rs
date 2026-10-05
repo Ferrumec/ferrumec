@@ -25,6 +25,51 @@ const BATCH_SIZE: i64 = 100;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 
+/// A transactional outbox: publish an event if, and only if, a database
+/// transaction commits.
+///
+/// Calling [`EventStream::publish`] right after `COMMIT` can lose the event
+/// if the process dies in between, and publishing before the commit can
+/// announce something that is then rolled back. The outbox avoids both:
+/// [`push`](Outbox::push) writes the event into the `outbox_events` table
+/// inside the caller's transaction, and a background task publishes pending
+/// rows to the [`EventStream`] afterwards.
+///
+/// ```ignore
+/// let outbox = Outbox::new(infra.database(), infra.event_stream()).await?;
+///
+/// let mut tx = infra.database().begin().await?;
+/// sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+///     .bind(id)
+///     .bind(&email)
+///     .execute(&mut *tx)
+///     .await?;
+/// outbox
+///     .push(&Event::new(UserRegistered { email }), &mut tx)
+///     .await?;
+/// tx.commit().await?; // the event is published after this succeeds
+/// ```
+///
+/// # Guarantees
+///
+/// - **At-least-once delivery.** If the process dies after the stream
+///   accepted an event but before the row was marked published, the event is
+///   sent again. Subscribers should dedupe on `metadata.event_id`.
+/// - **Order.** Events are published in insertion order by one publisher. On
+///   a failure the batch stops, so a later event never overtakes a failed
+///   one. With several instances sharing the table, order across instances is
+///   not guaranteed.
+/// - **Safe to run on many instances.** Pending rows are claimed with
+///   `FOR UPDATE SKIP LOCKED`.
+///
+/// # Storage
+///
+/// [`Outbox::new`] creates the `outbox_events` table and a partial index on
+/// unpublished rows if they don't exist. Published rows are kept with
+/// `published_at` set; delete old ones periodically.
+///
+/// Dropping the `Outbox` stops the background publisher. Unpublished events
+/// stay in the table and are sent by the next instance.
 pub struct Outbox {
     worker: JoinHandle<()>,
 }
@@ -33,6 +78,20 @@ impl Outbox {
     /// Creates the outbox table if needed, then spawns the background
     /// publisher. Events left unpublished by a previous run are published
     /// immediately.
+    ///
+    /// Must be called inside a Tokio runtime. It opens one dedicated
+    /// connection (detached from the pool) to `LISTEN` for new events, in
+    /// addition to the pool connections used while publishing. Publishing runs in a database
+    /// transaction held open for each batch of up to 100 events, so a slow
+    /// stream keeps a pool connection busy for that long.
+    ///
+    /// Create one `Outbox` per process and share it (for example in an
+    /// `Arc`); it is not `Clone`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the table cannot be created or the listener
+    /// cannot connect. Later publish failures are logged and retried.
     pub async fn new(database: PgPool, stream: Arc<dyn EventStream>) -> Result<Self, sqlx::Error> {
         migrate(&database).await?;
 
@@ -52,6 +111,20 @@ impl Outbox {
     /// Postgres only delivers when the transaction commits. The publisher
     /// therefore never wakes up before the row is visible, and a rollback
     /// wakes nobody.
+    ///
+    /// The event is stored as JSON together with its `T::SUBJECT`. Nothing is
+    /// published by this call; the event is sent only after `tx` commits. If
+    /// the transaction rolls back, the event is discarded with it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or either database statement fails.
+    /// The transaction should then be rolled back, as usual. Pushing the
+    /// same `event_id` twice fails on the unique constraint.
+    ///
+    /// The wake-up uses Postgres `LISTEN`/`NOTIFY`, which does not work
+    /// through PgBouncer in transaction-pooling mode. In that case events are
+    /// still published, but only on the 5 second poll.
     pub async fn push<T: EventType>(
         &self,
         event: &Event<T>,
