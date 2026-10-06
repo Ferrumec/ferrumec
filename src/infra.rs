@@ -2,13 +2,13 @@ use crate::cache::CacheFactory;
 use crate::cache::MokaCacheFactory;
 use crate::event::EventStream;
 use crate::event::LocalEventStream;
+use actix_web::{HttpResponse, web};
+use async_trait::async_trait;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
-
-use async_trait::async_trait;
 
 /// The infrastructure a service runs on: a database, a cache factory and an
 /// event stream.
@@ -18,7 +18,7 @@ use async_trait::async_trait;
 /// `distributed`) for Postgres + Redis + NATS. Implement it yourself to mix
 /// backends, for example Redis caching with an in-process event stream.
 #[async_trait]
-pub trait Infra {
+pub trait Infra: Clone + Send + Sync + 'static {
     /// Probes each dependency and reports its latency.
     async fn health_check(&self) -> Status;
     /// Returns a handle to the Postgres pool. Cloning a pool is cheap and
@@ -42,6 +42,36 @@ pub trait Infra {
     fn cache_factory(&self) -> impl CacheFactory;
     /// Returns the shared event stream.
     fn event_stream(&self) -> Arc<dyn EventStream>;
+    /// Registers a `GET {endpoint}` health check on an Actix service config.
+    ///
+    /// Returns 200 with the [`Status`] JSON when every backend responds,
+    /// otherwise 503 with the same body.
+    fn configure(&self, cfg: &mut web::ServiceConfig, endpoint: &str) {
+        let infra = self.clone();
+        cfg.route(
+            endpoint,
+            web::get().to(move || {
+                let infra = infra.clone();
+                async move {
+                    let status = infra.health_check().await;
+                    if status.is_healthy() {
+                        HttpResponse::Ok().json(status)
+                    } else {
+                        HttpResponse::ServiceUnavailable().json(status)
+                    }
+                }
+            }),
+        );
+    }
+}
+
+impl Status {
+    /// True when every backend answered within the timeout.
+    pub fn is_healthy(&self) -> bool {
+        self.postgres_latency_ms.is_some()
+            && self.redis_latency_ms.is_some()
+            && self.nats_latency_ms.is_some()
+    }
 }
 
 /// Result of [`Infra::health_check`], serializable for a `/health` endpoint.

@@ -1,11 +1,13 @@
+use crate::permission::PermissionSet;
+use crate::permission::Permissions;
 use actix_web::dev::Service;
 use actix_web::{App, HttpServer};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tracing_actix_web::{DefaultRootSpanBuilder, TracingLogger};
 
-use crate::{Module, Observability, record_request};
+use crate::{CacheFactory, Infra, Module, Observability, record_request};
 
 /// Initializes observability and runs an Actix Web server hosting `modules`.
 ///
@@ -21,7 +23,10 @@ use crate::{Module, Observability, record_request};
 /// [`record_request`] directly.
 ///
 /// Requires the `launch` feature.
-pub async fn launch(modules: Vec<(&'static str, Arc<dyn Module>)>) -> std::io::Result<()> {
+pub async fn launch(
+    modules: Vec<(&'static str, Arc<dyn Module>)>,
+    infra: impl Infra,
+) -> std::io::Result<()> {
     // ---------------------------------------------------------
     // Observability
     // ---------------------------------------------------------
@@ -39,12 +44,24 @@ pub async fn launch(modules: Vec<(&'static str, Arc<dyn Module>)>) -> std::io::R
     // ---------------------------------------------------------
 
     let modules = Arc::new(modules);
-
+    let permission_set = match PermissionSet::from_file("permissions.json") {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("failed to get permissions.json {e}");
+            panic!()
+        }
+    };
+    let session_store = infra
+        .clone()
+        .cache_factory()
+        .new_cache("permission_sessions", Duration::from_mins(30));
+    let permission_middleware = Permissions::new(permission_set, session_store);
     let server = HttpServer::new({
         let modules = Arc::clone(&modules);
 
         move || {
             let mut app = App::new()
+                .wrap(permission_middleware.clone())
                 .wrap(TracingLogger::<DefaultRootSpanBuilder>::new())
                 .wrap_fn(|req, srv| {
                     let start = Instant::now();
@@ -74,7 +91,7 @@ pub async fn launch(modules: Vec<(&'static str, Arc<dyn Module>)>) -> std::io::R
                 });
             }
 
-            app
+            app.configure(|cfg| infra.clone().configure(cfg, "health"))
         }
     })
     .bind(("127.0.0.1", 8080))?
@@ -89,6 +106,5 @@ pub async fn launch(modules: Vec<(&'static str, Arc<dyn Module>)>) -> std::io::R
     // Flush/shutdown telemetry providers after the HTTP server
     // has stopped accepting requests.
     telemetry.shutdown();
-
     result
 }

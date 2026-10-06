@@ -73,6 +73,8 @@
 pub mod cache;
 pub mod event;
 pub mod infra;
+mod permission;
+pub use permission::Authority;
 #[cfg(feature = "launch")]
 pub mod launch;
 #[cfg(feature = "launch")]
