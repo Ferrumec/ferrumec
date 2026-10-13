@@ -9,11 +9,11 @@
 //!
 //! - [`event`]: typed events in an [`Event`] envelope, the [`EventStream`]
 //!   trait with in-process and NATS backends, [`Subscriber`], and the
-//!   transactional [`event::Outbox`].
+//!   transactional `event::Outbox`.
 //! - [`cache`]: the async [`Store`] trait and a [`CacheFactory`] with Moka
 //!   (in-process) and Redis backends.
 //! - [`infra`]: the [`Infra`] trait that bundles the database pool, cache
-//!   factory and event stream, with [`LocalInfra`] (and `RemoteInfra` behind
+//!   factory and event stream, with `LocalInfra` (and `RemoteInfra` behind
 //!   the `distributed` feature).
 //! - `Module` and the `modules!` macro (feature `web`): a small convention for
 //!   building services from any [`Infra`] and mounting them on an Actix Web app.
@@ -25,7 +25,8 @@
 //!
 //! | Feature       | Enables                                                              |
 //! | ------------- | -------------------------------------------------------------------- |
-//! | *(default)*   | `LocalEventStream`, `MokaCacheFactory`, `LocalInfra`, `Outbox`       |
+//! | *(always)*    | The traits (`EventStream`, `Subscriber`, `Store`, `CacheFactory`, `Infra`), `Event` |
+//! | `local` (default) | `LocalEventStream`, `MokaCacheFactory`, `LocalInfra`, `Outbox`   |
 //! | `distributed` | `NatsEventStream`, `NatsAloStream`, `RedisCache`, `RemoteInfra`      |
 //! | `web`         | `Module`, `modules!`, `Authority`, `Infra::configure` (actix-web)    |
 //! | `launch`      | `launch::launch`, `Observability`, `record_request` (implies `web`)  |
@@ -33,6 +34,7 @@
 //! # Example
 //!
 //! ```ignore
+//! // Requires the `local` feature (on by default).
 //! use ferrumec::event::EventError;
 //! use ferrumec::{Event, EventType, Infra, LocalInfra, Subscriber};
 //! use serde::{Deserialize, Serialize};
@@ -74,6 +76,7 @@
 
 pub mod cache;
 pub mod event;
+#[cfg(feature = "local")]
 pub mod infra;
 #[cfg(feature = "web")]
 mod permission;
@@ -85,6 +88,7 @@ pub mod launch;
 pub mod observability;
 pub use cache::{CacheFactory, Store};
 pub use event::{Event, EventStream, EventType, Subscriber};
+#[cfg(feature = "local")]
 pub use infra::{Infra, LocalInfra};
 #[cfg(feature = "launch")]
 pub use observability::{Observability, record_request};

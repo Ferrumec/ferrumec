@@ -3,7 +3,7 @@
 //! Code that needs a cache asks a [`CacheFactory`] for a named
 //! [`Store<K, V>`] and doesn't care what backs it:
 //!
-//! - [`MokaCacheFactory`]: in-process caches (default).
+//! - `MokaCacheFactory` (feature `local`, on by default): in-process caches.
 //! - `RedisCache` (feature `distributed`): shared across instances. A Redis
 //!   `ConnectionManager` is itself a [`CacheFactory`].
 //!
@@ -14,7 +14,9 @@
 //! sessions.set(&"user:1".to_string(), "token".to_string()).await?;
 //! ```
 
+#[cfg(feature = "local")]
 mod moka_store;
+#[cfg(feature = "local")]
 pub use moka_store::MokaCacheFactory;
 #[cfg(feature = "distributed")]
 mod redis_store;

@@ -32,7 +32,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 /// Builds named [`Store`] caches.
 ///
-/// Implementations decide the concrete backend: [`MokaCacheFactory`](super::MokaCacheFactory)
+/// Implementations decide the concrete backend: `MokaCacheFactory`
 /// keeps entries in process, and a Redis `ConnectionManager` shares them
 /// across instances. Tests can supply a no-op or deterministic
 /// implementation.

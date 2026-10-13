@@ -15,9 +15,10 @@ use std::time::Instant;
 /// event stream.
 ///
 /// Write services against `Infra` and pick the implementation at startup:
-/// [`LocalInfra`] for development and tests, `RemoteInfra` (feature
+/// `LocalInfra` (feature `local`) for development and tests, `RemoteInfra` (feature
 /// `distributed`) for Postgres + Redis + NATS. Implement it yourself to mix
 /// backends, for example Redis caching with an in-process event stream.
+#[cfg(feature = "local")]
 #[async_trait]
 pub trait Infra: Clone + Send + Sync + 'static {
     /// Probes each dependency and reports its latency.
@@ -96,10 +97,13 @@ pub struct Status {
 /// [`Infra`] for development and tests: Postgres plus in-process caching and
 /// events.
 ///
-/// Uses [`MokaCacheFactory`] and a [`LocalEventStream`] with a queue of 1000
+/// Uses `MokaCacheFactory` and a `LocalEventStream` with a queue of 1000
 /// messages per subscriber. Cloning shares the same pool, caches and stream.
 /// Redis and NATS latencies are reported as `0`.
+///
+/// Requires the `local` feature.
 #[derive(Clone)]
+#[cfg(feature = "local")]
 pub struct LocalInfra {
     /// The Postgres connection pool.
     pub postgres: PgPool,
@@ -109,6 +113,7 @@ pub struct LocalInfra {
     pub events: Arc<LocalEventStream>,
 }
 
+#[cfg(feature = "local")]
 impl LocalInfra {
     /// Connects to Postgres and builds the in-process backends.
     ///
@@ -133,6 +138,7 @@ impl LocalInfra {
     }
 }
 
+#[cfg(feature = "local")]
 #[async_trait]
 impl Infra for LocalInfra {
     async fn health_check(&self) -> Status {

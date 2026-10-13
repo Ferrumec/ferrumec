@@ -3,10 +3,10 @@
 //! - Define an event by implementing [`EventType`] for a serializable payload.
 //! - Wrap it in an [`Event`] (payload plus [`EventMetaData`]) and publish it
 //!   with [`Event::publish`], or write it atomically with a database change
-//!   through the [`Outbox`].
+//!   through the `Outbox` (feature `local`).
 //! - Receive events by implementing [`Subscriber`].
-//! - Choose a transport by picking an [`EventStream`]: [`LocalEventStream`]
-//!   (in-process), or with the `distributed` feature `NatsEventStream`
+//! - Choose a transport by picking an [`EventStream`]: `LocalEventStream`
+//!   (feature `local`, in-process), or with the `distributed` feature `NatsEventStream`
 //!   (at-most-once) and `NatsAloStream` (JetStream, at-least-once).
 
 use async_trait::async_trait;
@@ -43,7 +43,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// This is the seam that lets a service run in-process during development and
 /// on NATS in production. Streams are used as `Arc<dyn EventStream>`.
 /// Delivery guarantees depend on the implementation; see
-/// [`LocalEventStream`] and the NATS streams.
+/// `LocalEventStream` and the NATS streams.
 pub trait EventStream: Send + Sync {
     /// Publishes `payload` on `subject`.
     ///
@@ -58,7 +58,7 @@ pub trait EventStream: Send + Sync {
     /// Registers `handler` for messages published on `subject`.
     ///
     /// The handler runs on a background task for as long as the stream is
-    /// alive. Streams that support wildcards (see [`LocalEventStream`])
+    /// alive. Streams that support wildcards (see `LocalEventStream`)
     /// accept `*` and `>` tokens in `subject`.
     fn subscribe<'a>(
         &'a self,
@@ -66,9 +66,13 @@ pub trait EventStream: Send + Sync {
         handler: Arc<dyn Handler>,
     ) -> BoxFuture<'a, Result<(), EventError>>;
 }
+#[cfg(feature = "local")]
 mod local;
+#[cfg(feature = "local")]
 mod outbox;
+#[cfg(feature = "local")]
 pub use local::LocalEventStream;
+#[cfg(feature = "local")]
 pub use outbox::Outbox;
 
 #[cfg(feature = "distributed")]
@@ -98,7 +102,7 @@ pub trait EventType: Serialize + DeserializeOwned + Send + Sync + 'static {
     ///
     /// A [`Subscriber`] expects a full `Event<T>`, so it cannot decode this
     /// message and will log an error and drop it. Prefer
-    /// [`Event::publish`] (or [`Outbox::push`]) unless the consumer reads
+    /// [`Event::publish`] (or `Outbox::push`) unless the consumer reads
     /// raw payloads.
     fn publish<'a>(&self, es: Arc<dyn EventStream>) -> BoxFuture<'_, Result<(), EventError>> {
         Box::pin(async move {

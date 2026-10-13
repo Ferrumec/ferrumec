@@ -140,7 +140,7 @@ impl EventMetaData {
 /// and delivered.
 ///
 /// Build one with [`Event::new`], chain the `with_*` builders, then publish it
-/// with [`Event::publish`] or hand it to an [`Outbox`](super::Outbox). On the
+/// with [`Event::publish`] or hand it to an `Outbox`. On the
 /// wire it is the JSON object `{"metadata": ..., "payload": ...}`.
 ///
 /// ```ignore
@@ -169,7 +169,7 @@ impl<T: super::EventType + Sync> Event<T> {
     ///
     /// This is fire-and-forget with respect to the database: if you need the
     /// event to be published if and only if a transaction commits, use
-    /// [`Outbox::push`](super::Outbox::push) instead.
+    /// `Outbox::push` instead.
     pub async fn publish(
         &self,
         es: Arc<dyn EventStream>,

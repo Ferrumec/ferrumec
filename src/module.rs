@@ -11,7 +11,7 @@ pub trait Module: Send + Sync + 'static {
     ///
     /// Take what you need from `infra`: the database pool, a cache factory,
     /// the event stream. This is also the place to register event
-    /// subscribers or start an [`Outbox`](crate::event::Outbox).
+    /// subscribers or start an `Outbox`.
     fn new(
         infra: impl Infra,
     ) -> impl std::future::Future<Output = Result<Self, Box<dyn std::error::Error>>>
