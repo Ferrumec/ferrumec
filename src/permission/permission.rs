@@ -41,37 +41,6 @@ pub struct Permission {
     pub bit_id: u8,
 }
 
-impl Permission {
-    /// Creates a new permission.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PermissionError::InvalidBitId`] if `bit_id >= 128`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use actix_web::http::Method;
-    /// use actixutils::middleware::Permission;
-    ///
-    /// let perm = Permission::new(Method::GET, "/users/{id}", 5).unwrap();
-    /// assert_eq!(perm.bit_id, 5);
-    /// ```
-    pub fn new(method: Method, url: &str, bit_id: u8) -> Result<Self, PermissionError> {
-        if bit_id >= 128 {
-            return Err(PermissionError::InvalidBitId {
-                bit_id: u64::from(bit_id),
-            });
-        }
-        let url = ResourceDef::new(url);
-        Ok(Self {
-            method,
-            url,
-            bit_id,
-        })
-    }
-}
-
 /// Internal struct for deserializing permission entries from JSON.
 #[derive(Debug, Deserialize)]
 struct PermissionJson {
@@ -189,30 +158,6 @@ impl PermissionSet {
         Self::from_deserialized(json)
     }
 
-    /// Loads a `PermissionSet` from a [`serde_json::Value`].
-    ///
-    /// This is useful for programmatic configuration or testing.
-    ///
-    /// # Errors
-    ///
-    /// Same error conditions as [`PermissionSet::from_file`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use actixutils::middleware::PermissionSet;
-    ///
-    /// let set = PermissionSet::from_json(serde_json::json!({
-    ///     "permissions": [
-    ///         { "method": "GET", "url": "/users", "bit_id": 0 }
-    ///     ]
-    /// })).unwrap();
-    /// ```
-    pub fn from_json(value: serde_json::Value) -> Result<Self, PermissionError> {
-        let json: PermissionsJson = serde_json::from_value(value)?;
-        Self::from_deserialized(json)
-    }
-
     /// Internal helper that converts the deserialized JSON representation into a
     /// validated `PermissionSet`.
     fn from_deserialized(json: PermissionsJson) -> Result<Self, PermissionError> {
@@ -268,16 +213,6 @@ impl PermissionSet {
         self.permissions
             .iter()
             .find(|p| p.method == *method && p.url.is_match(path))
-    }
-
-    /// Returns the number of permissions in the set.
-    pub fn len(&self) -> usize {
-        self.permissions.len()
-    }
-
-    /// Returns `true` if the set contains no permissions.
-    pub fn is_empty(&self) -> bool {
-        self.permissions.is_empty()
     }
 }
 

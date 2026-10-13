@@ -22,7 +22,7 @@ use crate::{CacheFactory, Infra, Module, Observability, record_request};
 /// other settings, build your own `HttpServer` and use [`Observability`] and
 /// [`record_request`] directly.
 ///
-/// Requires the `launch` feature.
+/// Requires the `launch` feature (which enables `web`).
 pub async fn launch(
     modules: Vec<(&'static str, Arc<dyn Module>)>,
     infra: impl Infra,

@@ -30,10 +30,6 @@ pub enum PermissionError {
     #[error("Invalid HTTP method: {0}")]
     InvalidMethod(String),
 
-    /// The route pattern could not be parsed as a valid Actix resource definition.
-    #[error("Invalid route pattern: {0}")]
-    InvalidRoute(String),
-
     /// The permission bit ID is outside the valid range `0..128`.
     #[error("Invalid bit_id: {bit_id}, must be in range 0..128")]
     InvalidBitId {

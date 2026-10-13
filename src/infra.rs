@@ -2,6 +2,7 @@ use crate::cache::CacheFactory;
 use crate::cache::MokaCacheFactory;
 use crate::event::EventStream;
 use crate::event::LocalEventStream;
+#[cfg(feature = "web")]
 use actix_web::{HttpResponse, web};
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -46,6 +47,9 @@ pub trait Infra: Clone + Send + Sync + 'static {
     ///
     /// Returns 200 with the [`Status`] JSON when every backend responds,
     /// otherwise 503 with the same body.
+    ///
+    /// Requires the `web` feature.
+    #[cfg(feature = "web")]
     fn configure(&self, cfg: &mut web::ServiceConfig, endpoint: &str) {
         let infra = self.clone();
         cfg.route(

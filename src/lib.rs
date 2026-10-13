@@ -15,8 +15,9 @@
 //! - [`infra`]: the [`Infra`] trait that bundles the database pool, cache
 //!   factory and event stream, with [`LocalInfra`] (and `RemoteInfra` behind
 //!   the `distributed` feature).
-//! - [`Module`] and the [`modules!`] macro: a small convention for building
-//!   services from any [`Infra`] and mounting them on an Actix Web app.
+//! - `Module` and the `modules!` macro (feature `web`): a small convention for
+//!   building services from any [`Infra`] and mounting them on an Actix Web app.
+//! - `Authority` and the permission middleware (feature `web`).
 //! - `launch` and `observability` (feature `launch`): an HTTP server
 //!   bootstrap with OpenTelemetry logs, metrics and traces.
 //!
@@ -26,7 +27,8 @@
 //! | ------------- | -------------------------------------------------------------------- |
 //! | *(default)*   | `LocalEventStream`, `MokaCacheFactory`, `LocalInfra`, `Outbox`       |
 //! | `distributed` | `NatsEventStream`, `NatsAloStream`, `RedisCache`, `RemoteInfra`      |
-//! | `launch`      | `launch::launch`, `Observability`, `record_request`                  |
+//! | `web`         | `Module`, `modules!`, `Authority`, `Infra::configure` (actix-web)    |
+//! | `launch`      | `launch::launch`, `Observability`, `record_request` (implies `web`)  |
 //!
 //! # Example
 //!
@@ -73,7 +75,9 @@
 pub mod cache;
 pub mod event;
 pub mod infra;
+#[cfg(feature = "web")]
 mod permission;
+#[cfg(feature = "web")]
 pub use permission::Authority;
 #[cfg(feature = "launch")]
 pub mod launch;
@@ -84,5 +88,7 @@ pub use event::{Event, EventStream, EventType, Subscriber};
 pub use infra::{Infra, LocalInfra};
 #[cfg(feature = "launch")]
 pub use observability::{Observability, record_request};
+#[cfg(feature = "web")]
 mod module;
+#[cfg(feature = "web")]
 pub use module::Module;
