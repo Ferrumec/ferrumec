@@ -20,7 +20,7 @@ opentelemetry_sdk = {version="0.33.0",optional=true}
 redis = { version = "1.7.0", features = ["aio", "connection-manager", "tokio-comp"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-sqlx = { version = "0.9.0", features = ["postgres", "uuid"], optional=true}
+sqlx = { version = "0.9.0", features = ["uuid"], optional=true}
 thiserror = "2.0.21"
 tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
 tracing = "0.1.44"
@@ -34,9 +34,11 @@ uuid = { version = "1.26.1", features = ["serde", "v4"] }
 # `MokaCacheFactory`, `LocalEventStream`, `Outbox` and `LocalInfra`. The traits
 # (`Store`, `CacheFactory`, `EventStream`, `Subscriber`, `Infra`, ...) and the `Event`
 # envelope are always available.
-local = ["moka", "dashmap","sqlx"]
+local = ["moka", "dashmap"]
+lite = ["sqlx/sqlite"]
+pg = ["sqlx/postgres"]
 # Backends that need external services (Redis, NATS); not usable by a fully local instance.
-distributed = ["redis", "async-nats"]
+distributed = ["redis", "async-nats","pg"]
 # Everything that launches or depends on the actix-web service: `Module`, `modules!`,
 # the permission middleware and `Infra::configure` (health endpoint).
 web = ["actix-web", "tracing-actix-web","local"]

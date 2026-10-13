@@ -1,81 +1,9 @@
-use crate::cache::CacheFactory;
-use crate::cache::MokaCacheFactory;
-use crate::event::EventStream;
-use crate::event::LocalEventStream;
-#[cfg(feature = "web")]
-use actix_web::{HttpResponse, web};
-use async_trait::async_trait;
-use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
-
-/// The infrastructure a service runs on: a database, a cache factory and an
-/// event stream.
-///
-/// Write services against `Infra` and pick the implementation at startup:
-/// `LocalInfra` (feature `local`) for development and tests, `RemoteInfra` (feature
-/// `distributed`) for Postgres + Redis + NATS. Implement it yourself to mix
-/// backends, for example Redis caching with an in-process event stream.
-#[cfg(feature = "local")]
-#[async_trait]
-pub trait Infra: Clone + Send + Sync + 'static {
-    /// Probes each dependency and reports its latency.
-    async fn health_check(&self) -> Status;
-    /// Returns a handle to the Postgres pool. Cloning a pool is cheap and
-    /// shares the same connections.
-    fn database(&self) -> PgPool;
-    /// Pings Postgres with `SELECT 1`. Returns the latency in milliseconds,
-    /// or `None` if it failed or took longer than 2 seconds.
-    async fn check_postgres(pool: &PgPool) -> Option<u128> {
-        let start = Instant::now();
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            sqlx::query("SELECT 1").execute(pool),
-        )
-        .await;
-        match result {
-            Ok(Ok(_)) => Some(start.elapsed().as_millis()),
-            _ => None,
-        }
-    }
-    /// Returns the factory used to create named caches.
-    fn cache_factory(&self) -> impl CacheFactory;
-    /// Returns the shared event stream.
-    fn event_stream(&self) -> Arc<dyn EventStream>;
-    /// Registers a `GET {endpoint}` health check on an Actix service config.
-    ///
-    /// Returns 200 with the [`Status`] JSON when every backend responds,
-    /// otherwise 503 with the same body.
-    ///
-    /// Requires the `web` feature.
-    #[cfg(feature = "web")]
-    fn configure(&self, cfg: &mut web::ServiceConfig, endpoint: &str) {
-        let infra = self.clone();
-        cfg.route(
-            endpoint,
-            web::get().to(move || {
-                let infra = infra.clone();
-                async move {
-                    let status = infra.health_check().await;
-                    if status.is_healthy() {
-                        HttpResponse::Ok().json(status)
-                    } else {
-                        HttpResponse::ServiceUnavailable().json(status)
-                    }
-                }
-            }),
-        );
-    }
-}
-
 impl Status {
     /// True when every backend answered within the timeout.
     pub fn is_healthy(&self) -> bool {
-        self.postgres_latency_ms.is_some()
-            && self.redis_latency_ms.is_some()
-            && self.nats_latency_ms.is_some()
+        self.db_latency_ms.is_some()
+            && self.cache_latency_ms.is_some()
+            && self.bus_latency_ms.is_some()
     }
 }
 
@@ -87,78 +15,303 @@ impl Status {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Status {
     /// Postgres latency (`SELECT 1`).
-    pub postgres_latency_ms: Option<u128>,
+    pub db_latency_ms: Option<u128>,
     /// Redis latency (`PING`).
-    pub redis_latency_ms: Option<u128>,
+    pub cache_latency_ms: Option<u128>,
     /// NATS latency (client flush).
-    pub nats_latency_ms: Option<u128>,
+    pub bus_latency_ms: Option<u128>,
 }
 
-/// [`Infra`] for development and tests: Postgres plus in-process caching and
-/// events.
-///
-/// Uses `MokaCacheFactory` and a `LocalEventStream` with a queue of 1000
-/// messages per subscriber. Cloning shares the same pool, caches and stream.
-/// Redis and NATS latencies are reported as `0`.
-///
-/// Requires the `local` feature.
-#[derive(Clone)]
-#[cfg(feature = "local")]
-pub struct LocalInfra {
-    /// The Postgres connection pool.
-    pub postgres: PgPool,
-    /// The in-process cache factory.
-    pub cache_factory: MokaCacheFactory,
-    /// The in-process event stream.
-    pub events: Arc<LocalEventStream>,
-}
+#[cfg(feature = "pg")]
+mod pg {
+    use crate::cache::CacheFactory;
+    use crate::cache::MokaCacheFactory;
+    use crate::event::EventStream;
+    use crate::event::LocalEventStream;
+    use crate::infra::Status;
+    #[cfg(feature = "web")]
+    use actix_web::{HttpResponse, web};
+    use async_trait::async_trait;
+    use sqlx::PgPool;
+    use sqlx::postgres::PgPoolOptions;
+    use std::sync::Arc;
 
-#[cfg(feature = "local")]
-impl LocalInfra {
-    /// Connects to Postgres and builds the in-process backends.
+    use std::time::Duration;
+    use std::time::Instant;
+
+    /// The infrastructure a service runs on: a database, a cache factory and an
+    /// event stream.
     ///
-    /// Reads `DATABASE_URL`, defaulting to
-    /// `postgres://postgres:postgres@localhost:5432/postgres`. The pool has
-    /// up to 20 connections and a 5 second acquire timeout.
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".into());
-
-        // Postgres
-        let postgres = PgPoolOptions::new()
-            .max_connections(20)
-            .acquire_timeout(Duration::from_secs(5))
-            .connect(&database_url)
-            .await?;
-        Ok(Self {
-            postgres,
-            events: Arc::new(LocalEventStream::new(1000)),
-            cache_factory: MokaCacheFactory::default(),
-        })
-    }
-}
-
-#[cfg(feature = "local")]
-#[async_trait]
-impl Infra for LocalInfra {
-    async fn health_check(&self) -> Status {
-        let pg = Self::check_postgres(&self.postgres).await;
-        Status {
-            postgres_latency_ms: pg,
-            redis_latency_ms: Some(0),
-            nats_latency_ms: Some(0),
+    /// Write services against `Infra` and pick the implementation at startup:
+    /// `LocalInfra` (feature `local`) for development and tests, `RemoteInfra` (feature
+    /// `distributed`) for Postgres + Redis + NATS. Implement it yourself to mix
+    /// backends, for example Redis caching with an in-process event stream.
+    #[cfg(feature = "local")]
+    #[async_trait]
+    pub trait Infra: Clone + Send + Sync + 'static {
+        /// Probes each dependency and reports its latency.
+        async fn health_check(&self) -> Status;
+        /// Returns a handle to the Postgres pool. Cloning a pool is cheap and
+        /// shares the same connections.
+        fn database(&self) -> PgPool;
+        /// Pings Postgres with `SELECT 1`. Returns the latency in milliseconds,
+        /// or `None` if it failed or took longer than 2 seconds.
+        async fn check_postgres(pool: &PgPool) -> Option<u128> {
+            let start = Instant::now();
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                sqlx::query("SELECT 1").execute(pool),
+            )
+            .await;
+            match result {
+                Ok(Ok(_)) => Some(start.elapsed().as_millis()),
+                _ => None,
+            }
+        }
+        /// Returns the factory used to create named caches.
+        fn cache_factory(&self) -> impl CacheFactory;
+        /// Returns the shared event stream.
+        fn event_stream(&self) -> Arc<dyn EventStream>;
+        /// Registers a `GET {endpoint}` health check on an Actix service config.
+        ///
+        /// Returns 200 with the [`Status`] JSON when every backend responds,
+        /// otherwise 503 with the same body.
+        ///
+        /// Requires the `web` feature.
+        #[cfg(feature = "web")]
+        fn configure(&self, cfg: &mut web::ServiceConfig, endpoint: &str) {
+            let infra = self.clone();
+            cfg.route(
+                endpoint,
+                web::get().to(move || {
+                    let infra = infra.clone();
+                    async move {
+                        let status = infra.health_check().await;
+                        if status.is_healthy() {
+                            HttpResponse::Ok().json(status)
+                        } else {
+                            HttpResponse::ServiceUnavailable().json(status)
+                        }
+                    }
+                }),
+            );
         }
     }
-    fn database(&self) -> PgPool {
-        self.postgres.clone()
+
+    /// [`Infra`] for development and tests: Postgres plus in-process caching and
+    /// events.
+    ///
+    /// Uses `MokaCacheFactory` and a `LocalEventStream` with a queue of 1000
+    /// messages per subscriber. Cloning shares the same pool, caches and stream.
+    /// Redis and NATS latencies are reported as `0`.
+    ///
+    /// Requires the `local` feature.
+    #[derive(Clone)]
+    #[cfg(feature = "local")]
+    pub struct LocalInfra {
+        /// The Postgres connection pool.
+        pub postgres: PgPool,
+        /// The in-process cache factory.
+        pub cache_factory: MokaCacheFactory,
+        /// The in-process event stream.
+        pub events: Arc<LocalEventStream>,
     }
-    fn cache_factory(&self) -> impl CacheFactory {
-        self.cache_factory.clone()
+
+    #[cfg(feature = "local")]
+    impl LocalInfra {
+        /// Connects to Postgres and builds the in-process backends.
+        ///
+        /// Reads `DATABASE_URL`, defaulting to
+        /// `postgres://postgres:postgres@localhost:5432/postgres`. The pool has
+        /// up to 20 connections and a 5 second acquire timeout.
+        pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+            let database_url = std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".into());
+
+            // Postgres
+            let postgres = PgPoolOptions::new()
+                .max_connections(20)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect(&database_url)
+                .await?;
+            Ok(Self {
+                postgres,
+                events: Arc::new(LocalEventStream::new(1000)),
+                cache_factory: MokaCacheFactory::default(),
+            })
+        }
     }
-    fn event_stream(&self) -> Arc<dyn EventStream> {
-        self.events.clone()
+
+    #[cfg(feature = "local")]
+    #[async_trait]
+    impl Infra for LocalInfra {
+        async fn health_check(&self) -> Status {
+            let pg = Self::check_postgres(&self.postgres).await;
+            Status {
+                db_latency_ms: pg,
+                cache_latency_ms: Some(0),
+                bus_latency_ms: Some(0),
+            }
+        }
+        fn database(&self) -> PgPool {
+            self.postgres.clone()
+        }
+        fn cache_factory(&self) -> impl CacheFactory {
+            self.cache_factory.clone()
+        }
+        fn event_stream(&self) -> Arc<dyn EventStream> {
+            self.events.clone()
+        }
     }
 }
+
+#[cfg(feature = "lite")]
+mod lite {
+    use crate::cache::CacheFactory;
+    use crate::cache::MokaCacheFactory;
+    use crate::event::EventStream;
+    use crate::event::LocalEventStream;
+    use crate::infra::Status;
+    #[cfg(feature = "web")]
+    use actix_web::{HttpResponse, web};
+    use async_trait::async_trait;
+    use sqlx::SqlitePool;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::sync::Arc;
+
+    use std::time::Duration;
+    use std::time::Instant;
+    /// The infrastructure a service runs on: a database, a cache factory and an
+    /// event stream.
+    ///
+    /// Write services against `Infra` and pick the implementation at startup:
+    /// `LocalInfra` (feature `local`) for development and tests, `RemoteInfra` (feature
+    /// `distributed`) for Postgres + Redis + NATS. Implement it yourself to mix
+    /// backends, for example Redis caching with an in-process event stream.
+    #[cfg(feature = "local")]
+    #[async_trait]
+    pub trait Infra: Clone + Send + Sync + 'static {
+        /// Probes each dependency and reports its latency.
+        async fn health_check(&self) -> Status;
+        /// Returns a handle to the Postgres pool. Cloning a pool is cheap and
+        /// shares the same connections.
+        fn database(&self) -> SqlitePool;
+        /// Pings Postgres with `SELECT 1`. Returns the latency in milliseconds,
+        /// or `None` if it failed or took longer than 2 seconds.
+        async fn check_postgres(pool: &SqlitePool) -> Option<u128> {
+            let start = Instant::now();
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                sqlx::query("SELECT 1").execute(pool),
+            )
+            .await;
+            match result {
+                Ok(Ok(_)) => Some(start.elapsed().as_millis()),
+                _ => None,
+            }
+        }
+        /// Returns the factory used to create named caches.
+        fn cache_factory(&self) -> impl CacheFactory;
+        /// Returns the shared event stream.
+        fn event_stream(&self) -> Arc<dyn EventStream>;
+        /// Registers a `GET {endpoint}` health check on an Actix service config.
+        ///
+        /// Returns 200 with the [`Status`] JSON when every backend responds,
+        /// otherwise 503 with the same body.
+        ///
+        /// Requires the `web` feature.
+        #[cfg(feature = "web")]
+        fn configure(&self, cfg: &mut web::ServiceConfig, endpoint: &str) {
+            let infra = self.clone();
+            cfg.route(
+                endpoint,
+                web::get().to(move || {
+                    let infra = infra.clone();
+                    async move {
+                        let status = infra.health_check().await;
+                        if status.is_healthy() {
+                            HttpResponse::Ok().json(status)
+                        } else {
+                            HttpResponse::ServiceUnavailable().json(status)
+                        }
+                    }
+                }),
+            );
+        }
+    }
+
+    /// [`Infra`] for development and tests: Postgres plus in-process caching and
+    /// events.
+    ///
+    /// Uses `MokaCacheFactory` and a `LocalEventStream` with a queue of 1000
+    /// messages per subscriber. Cloning shares the same pool, caches and stream.
+    /// Redis and NATS latencies are reported as `0`.
+    ///
+    /// Requires the `local` feature.
+    #[derive(Clone)]
+    #[cfg(feature = "local")]
+    pub struct LocalInfra {
+        /// The Postgres connection pool.
+        pub postgres: SqlitePool,
+        /// The in-process cache factory.
+        pub cache_factory: MokaCacheFactory,
+        /// The in-process event stream.
+        pub events: Arc<LocalEventStream>,
+    }
+
+    #[cfg(feature = "local")]
+    impl LocalInfra {
+        /// Connects to Postgres and builds the in-process backends.
+        ///
+        /// Reads `DATABASE_URL`, defaulting to
+        /// `postgres://postgres:postgres@localhost:5432/postgres`. The pool has
+        /// up to 20 connections and a 5 second acquire timeout.
+        pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+            let database_url = std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".into());
+
+            // Postgres
+            let postgres = SqlitePoolOptions::new()
+                .max_connections(20)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect(&database_url)
+                .await?;
+            Ok(Self {
+                postgres,
+                events: Arc::new(LocalEventStream::new(1000)),
+                cache_factory: MokaCacheFactory::default(),
+            })
+        }
+    }
+
+    #[cfg(feature = "local")]
+    #[async_trait]
+    impl Infra for LocalInfra {
+        async fn health_check(&self) -> Status {
+            let pg = Self::check_postgres(&self.postgres).await;
+            Status {
+                db_latency_ms: pg,
+                cache_latency_ms: Some(0),
+                bus_latency_ms: Some(0),
+            }
+        }
+        fn database(&self) -> SqlitePool {
+            self.postgres.clone()
+        }
+        fn cache_factory(&self) -> impl CacheFactory {
+            self.cache_factory.clone()
+        }
+        fn event_stream(&self) -> Arc<dyn EventStream> {
+            self.events.clone()
+        }
+    }
+}
+
+#[cfg(feature = "lite")]
+pub use lite::{Infra, LocalInfra};
+
+#[cfg(feature = "pg")]
+pub use pg::{Infra, LocalInfra};
 
 #[cfg(feature = "distributed")]
 pub mod dist {
@@ -274,8 +427,8 @@ pub mod dist {
                 Self::check_nats(&self.nats.client),
             );
             Status {
-                postgres_latency_ms: pg,
-                redis_latency_ms: rd,
+                db_latency_ms: pg,
+                cache_latency_ms: rd,
                 nats_latency_ms: nt,
             }
         }
