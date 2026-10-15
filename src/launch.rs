@@ -44,23 +44,24 @@ pub async fn launch(
     // ---------------------------------------------------------
 
     let modules = Arc::new(modules);
-    let permission_set = match PermissionSet::from_file("permissions.json") {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("failed to get permissions.json {e}");
-            panic!()
-        }
-    };
+
+    let permission_set = PermissionSet::from_file("permissions.json").unwrap_or_else(|e| {
+        tracing::error!("failed to load permissions.json: {e}");
+        panic!("failed to load permissions.json: {e}");
+    });
+
     let session_store = infra
         .clone()
         .cache_factory()
         .new_cache("permission_sessions", Duration::from_mins(30));
+
     let permission_middleware = Permissions::new(permission_set, session_store);
+
     let server = HttpServer::new({
         let modules = Arc::clone(&modules);
 
         move || {
-            let mut app = App::new()
+            let app = App::new()
                 .wrap(permission_middleware.clone())
                 .wrap(TracingLogger::<DefaultRootSpanBuilder>::new())
                 .wrap_fn(|req, srv| {
@@ -71,7 +72,6 @@ pub async fn launch(
 
                     async move {
                         let response = future.await?;
-
                         let duration = start.elapsed();
 
                         let route = response
@@ -85,13 +85,25 @@ pub async fn launch(
                     }
                 });
 
+            // API routes first, so they take priority over the static catch-all.
+            let mut api = actix_web::web::scope("/api");
             for (namespace, module) in modules.iter() {
-                app = app.configure(|cfg| {
+                api = api.configure(|cfg| {
                     module.clone().configure(cfg, namespace);
                 });
             }
+            api = api.configure(|cfg| infra.clone().configure(cfg, "health"));
 
-            app.configure(|cfg| infra.clone().configure(cfg, "health"))
+            let mut app = app.service(api);
+
+            // Static frontend last: it matches everything under "/".
+            if let Ok(frontend) = std::env::var("FRONTEND") {
+                app = app.service(
+                    actix_files::Files::new("/", frontend).index_file("index.html"),
+                );
+            }
+
+            app
         }
     })
     .bind(("127.0.0.1", 8080))?

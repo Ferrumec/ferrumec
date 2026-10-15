@@ -1,11 +1,12 @@
 [package]
 name = "ferrumec"
-version = "0.4.2"
+version = "0.4.3-a"
 edition = "2024"
 description = "Core building blocks for event-driven Rust microservices: pluggable event streams (local or NATS), caching (Moka or Redis), and Postgres-backed infrastructure."
 license = "MIT"
 
 [dependencies]
+actix-files = "0.6.10"
 actix-web = { version = "4.15.0", optional = true }
 async-nats = { version = "0.47.0", optional = true }
 async-trait = "0.1.92"
