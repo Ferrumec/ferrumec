@@ -316,10 +316,11 @@ pub use pg::{Infra, LocalInfra};
 #[cfg(feature = "distributed")]
 pub mod dist {
     use crate::event::NatsEventStream;
-    use crate::infra::{Arc, CacheFactory, EventStream, Infra, Status};
+    use crate::{CacheFactory, EventStream, Infra, infra::Status};
     use async_nats::Client as NatsClient;
     use redis::aio::ConnectionManager as RedisManager;
     use sqlx::PgPool;
+    use std::sync::Arc;
     use sqlx::postgres::PgPoolOptions;
     use std::time::{Duration, Instant};
 
@@ -429,7 +430,7 @@ pub mod dist {
             Status {
                 db_latency_ms: pg,
                 cache_latency_ms: rd,
-                nats_latency_ms: nt,
+                bus_latency_ms: nt,
             }
         }
         fn database(&self) -> PgPool {
