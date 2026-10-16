@@ -98,7 +98,7 @@ pub async fn launch(
 
             // Static frontend last: it matches everything under "/".
             if let Ok(frontend) = std::env::var("FRONTEND") {
-                app = app.service(
+                app = app.default_service(
                     actix_files::Files::new("/", frontend).index_file("index.html"),
                 );
             }
