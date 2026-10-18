@@ -890,6 +890,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "futures",
+ "futures-util",
  "moka",
  "opentelemetry",
  "opentelemetry-appender-tracing",

@@ -1,13 +1,15 @@
+use crate::Store;
 use actix_web::HttpMessage;
 use actix_web::body::{BoxBody, MessageBody};
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready};
-use actix_web::{Error, HttpResponse};
+use actix_web::{
+    Error, FromRequest, HttpRequest, HttpResponse, dev::Payload, error::ErrorInternalServerError,
+};
+use futures_util::future::LocalBoxFuture;
 use std::future::{Future, Ready, ready};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-
-use crate::Store;
 use uuid::Uuid;
 
 use super::permission::PermissionSet;
@@ -25,6 +27,20 @@ pub struct Authority {
     pub user: Uuid,
     pub namespace: Uuid,
     pub role: u128,
+}
+
+impl FromRequest for Authority {
+    type Error = Error;
+    type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+        // Prefer the Filters already constructed by middleware.
+        if let Some(filters) = req.extensions().get::<Authority>() {
+            return Box::pin(ready(Ok(filters.clone())));
+        }
+        tracing::error!("Permission middleware not wrapped for {}", req.path());
+        Box::pin(ready(Err(ErrorInternalServerError("Configuration Error"))))
+    }
 }
 
 impl Permissions {

@@ -320,8 +320,8 @@ pub mod dist {
     use async_nats::Client as NatsClient;
     use redis::aio::ConnectionManager as RedisManager;
     use sqlx::PgPool;
-    use std::sync::Arc;
     use sqlx::postgres::PgPoolOptions;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     /// [`Infra`] for production: Postgres, Redis caching and NATS events.
