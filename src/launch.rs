@@ -57,6 +57,12 @@ pub async fn launch(
 
     let permission_middleware = Permissions::new(permission_set, session_store);
 
+    let host = std::env::var("HOST").unwrap_or("0.0.0.0".to_string());
+    let port = std::env::var("PORT")
+        .unwrap_or("8080".to_string())
+        .parse::<u16>()
+        .expect("invalid value for PORT");
+
     let server = HttpServer::new({
         let modules = Arc::clone(&modules);
 
@@ -106,7 +112,7 @@ pub async fn launch(
             app
         }
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind((host, port))?
     .run();
 
     // ---------------------------------------------------------
