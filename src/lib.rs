@@ -78,20 +78,10 @@ pub mod cache;
 pub mod event;
 #[cfg(feature = "local")]
 pub mod infra;
-#[cfg(feature = "web")]
-mod permission;
-#[cfg(feature = "web")]
-pub use permission::Authority;
-#[cfg(feature = "launch")]
-pub mod launch;
-#[cfg(feature = "launch")]
-pub mod observability;
 pub use cache::{CacheFactory, Store};
 pub use event::{Event, EventStream, EventType, Subscriber};
 #[cfg(feature = "local")]
 pub use infra::{Infra, LocalInfra};
-#[cfg(feature = "launch")]
-pub use observability::{Observability, record_request};
 #[cfg(feature = "web")]
 mod module;
 #[cfg(feature = "web")]
